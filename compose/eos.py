@@ -155,7 +155,7 @@ class Table:
 
         return eos
 
-    def compute_cs2(self, floor=None):
+    def compute_cs2(self, floor=None, include_partials=False, pneg_fac = 1e-3):
         """
         Computes the square of the sound speed
         """
@@ -163,6 +163,11 @@ class Table:
         S = self.thermo["Q2"]
         u = self.mn*(self.thermo["Q7"] + 1)
         h = u + self.thermo["Q1"]
+
+        if P.min() < 0:
+            P = P - (1 + pneg_fac)*P.min()
+        elif P.min() == 0:
+            P = P + 1e-16
 
         dPdn = P*self.diff_wrt_nb(np.log(P))
 
@@ -173,11 +178,28 @@ class Table:
 
             self.thermo["cs2"] = (dPdn - dSdn/dSdt*dPdt)/h
         else:
+            dPdt = np.zeros(P.shape)
+            dSdn = np.zeros(S.shape)
+            dSdt = np.zeros(S.shape)
+
             self.thermo["cs2"] = dPdn/h
 
+        if include_partials:
+            self.thermo["dPdn"] = dPdn
+            self.thermo["dPdt"] = dPdt
+            self.thermo["dSdn"] = dSdn
+            self.thermo["dSdt"] = dSdt
+            
         if floor is not None:
             self.thermo["cs2"] = np.maximum(self.thermo["cs2"], floor)
         self.md.thermo[12] = ("cs2", "sound speed squared [c^2]")
+        
+        if include_partials:
+            # These are not given indexes in the CompOSE spec, so we use the max thermo index + 1,2,3,4
+            self.md.thermo[29] = ("dPdn", "derivative of pressure w.r.t. baryon number density at constant t, yq [MeV]")
+            self.md.thermo[30] = ("dPdt", "derivative of pressure w.r.t. temperature at constant nb, yq  [fm^-3]")
+            self.md.thermo[31] = ("dSdn", "derivative of entropy per baryon w.r.t. baryon number density at constant t, yq [fm^3]")
+            self.md.thermo[32] = ("dSdt", "derivative of entropy per baryon w.r.t. temperature at constant nb, yq  [MeV^-1]")
         
     def get_polytrope(self,nb_idx):
         """
@@ -238,6 +260,7 @@ class Table:
         All other values in eos.thermo, and any read from eos.compo or eos.micro are discarded.
         """
         assert self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1
+        assert nb_min < self.nb[0]
 
         # Set up new nb grid
         log_nb = np.log(self.nb)
@@ -290,8 +313,6 @@ class Table:
             eos.thermo[key] = np.concatenate((new_thermo[key][:,np.newaxis,np.newaxis],data_old),axis=0)
 
         return eos
-        
-        
 
     def diff_wrt_nb(self, Q):
         """
@@ -464,9 +485,9 @@ class Table:
             return self.interpolate_3D(nb_new, yq_new, t_new, method=method)
         elif (self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1):
             # 1D table in nb
-            assert(nb_new!=[])
-            assert(yq_new==[])
-            assert(t_new==[])
+            assert(nb_new.size>0)
+            assert(yq_new == [])
+            assert(t_new == [])
             return self.interpolate_1D(nb_new, method=method)
         else:
             raise ValueError("Interpolation on to new grid is not supported for table with dimensions ({:d},{:d},{:d}).".format(self.shape[0],self.shape[1],self.shape[2]))
@@ -1018,7 +1039,9 @@ class Table:
                 compression="gzip", compression_opts=9)
             dfile[name].attrs["desc"] = desc
 
-    def write_lorene(self, fname):
+        dfile.close()
+
+    def write_lorene(self, fname, subsample = 1):
         """
         Export the table in LORENE format. This is only possible for 1D tables.
         """
@@ -1026,12 +1049,12 @@ class Table:
         assert self.shape[2] == 1
 
         with open(fname, "w") as f:
-            f.write("#\n#\n#\n#\n#\n%d\n#\n#\n#\n" % len(self.nb))
-            for i in range(len(self.nb)):
+            f.write("#\n#\n#\n#\n#\n%d\n#\n#\n#\n" % (len(self.nb)//subsample))
+            for j ,i in enumerate(range(0,len(self.nb),subsample)):
                 nb = self.nb[i]
                 e  = Table.unit_dens*self.nb[i]*self.mn*(self.thermo["Q7"][i,0,0] + 1)
                 p  = Table.unit_press*self.thermo["Q1"][i,0,0]*self.nb[i]
-                f.write("%d %.15e %.15e %.15e\n" % (i, nb, e, p))
+                f.write("%d %.15e %.15e %.15e\n" % (j+1, nb, e, p))
 
     def write_number_fractions(self, fname):
         """
@@ -1050,7 +1073,7 @@ class Table:
             f.write("\n#\n#\n#\n")
 
             for i in range(L):
-                f.write("%d" %i)
+                f.write("%d" %(i+1))
                 for key in self.Y.keys():
                     yi = self.Y[key][i]
                     f.write(" %.15e" %yi)
