@@ -20,7 +20,7 @@ Utilities to read general purpose (3D) EOS tables
 
 from copy import deepcopy
 import h5py
-from math import pi
+from math import pi, floor
 import numpy as np
 import os
 
@@ -178,6 +178,120 @@ class Table:
         if floor is not None:
             self.thermo["cs2"] = np.maximum(self.thermo["cs2"], floor)
         self.md.thermo[12] = ("cs2", "sound speed squared [c^2]")
+        
+    def get_polytrope(self,nb_idx):
+        """
+        Get the polytrope coefficients Gamma and Kappa (p=K*rho^G) at a given nb index. 
+        Uses second order correct finite differences.
+        
+        Only valid for 1D tables (constant T and Ye)
+        """
+        assert self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1
+        
+        if nb_idx==0:
+            nb = self.nb[0:3]
+            press = self.thermo["Q1"][0:3,0,0]*nb
+            
+            log_nb = np.log(nb)
+            log_press = np.log(press)
+            
+            dlpdlnb = (-3*log_press[0] + 4*log_press[1] - log_press[2])/(log_nb[2] - log_nb[0])
+            lp = log_press[0]
+            lnb = log_nb[0]
+            
+        elif nb_idx==-1 or nb_idx==self.shape[0]-1:
+            nb = self.nb[-3:]
+            press = self.thermo["Q1"][-3:,0,0]*nb
+            
+            log_nb = np.log(nb)
+            log_press = np.log(press)
+            
+            dlpdlnb = (log_press[0] - 4*log_press[1] + 3*log_press[2])/(log_nb[2] - log_nb[0])
+            lp = log_press[2]
+            lnb = log_nb[2]
+            
+            
+        else:
+            nb = self.nb[nb_idx-1:nb_idx+2]
+            press = self.thermo["Q1"][nb_idx-1:nb_idx+2,0,0]*nb
+            
+            log_nb = np.log(nb)
+            log_press = np.log(press)
+            
+            dlpdlnb = (-1*log_press[0] + log_press[2])/(log_nb[2] - log_nb[0])
+            lp = log_press[1]
+            lnb = log_nb[1]
+            
+            
+        Gamma = dlpdlnb
+        Kappa = np.exp(lp - Gamma*(lnb + np.log(self.mn)))
+        
+        return Kappa, Gamma
+    
+    def extend_with_polytrope(self, nb_min, Kappa, Gamma):
+        """
+        Extend a 1D table down to nb_min using the polytrope given. 
+        The original grid is assumed to be in equal log spacing of nb, and this grid is extended down to nb_min, based on the values at indicies [0,1]. 
+        The grid is extended as far as possible while maintaing nb[0]>=nb_min.
+        
+        Q1, Q3, Q6, and Q7 are calculated, Q2 is set to zero, and Q4 and Q5 repeat their values at the lower edge of the existing table. 
+        All other values in eos.thermo, and any read from eos.compo or eos.micro are discarded.
+        """
+        assert self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1
+
+        # Set up new nb grid
+        log_nb = np.log(self.nb)
+        log_nb_min = np.log(nb_min)
+        dlog_nb = log_nb[1] - log_nb[0]
+        new_nb_count = floor((log_nb[0]-log_nb_min)/dlog_nb)
+        new_log_nb = np.arange(-new_nb_count,0)*dlog_nb + log_nb[0]
+        new_nb = np.exp(new_log_nb)
+
+        # Calculate thermodynamic variables for new nb values        
+        new_press = Kappa * ((self.mn*new_nb)**Gamma)
+
+        new_eps_shifted = (Kappa/(Gamma-1))*((self.mn*new_nb)**(Gamma-1))
+        new_eps_0 = (Kappa/(Gamma-1))*((self.mn*self.nb[0])**(Gamma-1))
+        old_eps_0 = self.thermo["Q7"][0,0,0]
+        new_eps_const = old_eps_0 - new_eps_0
+        new_eps = new_eps_shifted + new_eps_const
+        
+        new_mub_scaled = self.mn*(1 + new_eps + (Gamma-1)*(new_eps - new_eps_const))
+        new_mub_0 = self.mn*(1 + (new_eps_0+new_eps_const) + (Gamma-1)*new_eps_0)
+        old_mub_0 = (self.thermo["Q3"][0,0,0]+1)*self.mn
+        new_mub_scale = old_mub_0 / new_mub_0
+        new_mub = new_mub_scaled * new_mub_scale
+        
+        # Set up thermo dict for new data
+        new_thermo = {}
+        new_thermo["Q1"] = new_press/new_nb
+        new_thermo["Q2"] = np.zeros(new_nb_count)
+        new_thermo["Q3"] = (new_mub/self.mn) - 1
+        new_thermo["Q4"] = np.ones(new_nb_count)*self.thermo["Q4"][0,0,0]
+        new_thermo["Q5"] = np.ones(new_nb_count)*self.thermo["Q5"][0,0,0]
+        new_thermo["Q6"] = new_eps
+        new_thermo["Q7"] = new_eps
+        
+        # Create new eos object
+        eos = Table(self.md, self.dtype)
+        eos.nb = np.concatenate((new_nb,self.nb.copy()),axis=0)
+        eos.t = self.t.copy()
+        eos.yq = self.yq.copy()
+        eos.shape = (new_nb_count + self.shape[0],self.shape[1],self.shape[2])
+        eos.valid = np.zeros(eos.shape, dtype=bool)
+        eos.mn = self.mn
+        eos.mp = self.mp
+        eos.lepton = self.lepton
+
+        # Populate new eos.thermo dictionary
+        for idx in range(1,8):
+            key = "Q{:d}".format(idx)
+            data_old = self.thermo[key]
+            eos.thermo[key] = np.concatenate((new_thermo[key][:,np.newaxis,np.newaxis],data_old),axis=0)
+
+        return eos
+        
+        
 
     def diff_wrt_nb(self, Q):
         """
