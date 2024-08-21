@@ -128,3 +128,18 @@ def read_micro_composite_index(Ki):
     variable_names = (variable_symbol.format(*particle_names), variable_description.format(*particle_names))
 
     return variable_names
+
+def NQT_log(x):
+    assert(np.all(x>0.0))
+    # Positive definite x gives mantissa in range 0.5-1.0, we want 1.0-2.0 (then subtract 1)
+    mantissa, exponent = np.frexp(x)
+    mantissa = 2*mantissa - 1
+    exponent -= 1 # We doubled the mantissa, so must subtract 1 from the exponent.
+    return mantissa + exponent
+
+def NQT_exp(x):
+    # Gives us fractional and integer part, mantissa 0.0-1.0
+    exponent, mantissa = np.divmod(x,1)
+    mantissa = 0.5*(mantissa+1)
+    exponent = np.array(exponent,dtype=int) + 1 # opposite of above
+    return np.ldexp(mantissa,exponent)

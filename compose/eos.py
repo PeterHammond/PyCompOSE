@@ -479,9 +479,9 @@ class Table:
 
         if (self.shape[0] > 1 and self.shape[1] > 1 and self.shape[2] > 1):
             # 3D table
-            assert(nb_new!=[])
-            assert(yq_new!=[])
-            assert(t_new!=[])
+            assert(nb_new.size>0)
+            assert(yq_new.size>0)
+            assert(t_new.size>0)
             return self.interpolate_3D(nb_new, yq_new, t_new, method=method)
         elif (self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1):
             # 1D table in nb
@@ -535,7 +535,20 @@ class Table:
                 myvar = var3d
             func = RegularGridInterpolator((log_nb, self.yq, log_t),
                     myvar, method=method)
-            res = func(xi).reshape(eos.shape)
+            # res = func(xi).reshape(eos.shape) # This is EXTREMELY memory intensive for a full 3D table with cubic interpolation.
+            # Better for memory, but slower
+            if method=="cubic":
+                res = np.zeros(xi.shape[0])
+                batch_size = 100000
+                idx_current = 0
+                while idx_current + batch_size < xi.shape[0]:
+                    res[idx_current:idx_current+batch_size] = func(xi[idx_current:idx_current+batch_size])
+                    idx_current += batch_size
+                res[idx_current:] = func(xi[idx_current:])
+                res = res.reshape(eos.shape)
+            else:
+                # This is fine when using lower order interpolation
+                res = func(xi).reshape(eos.shape)
             if log:
                 return np.exp(res)
             return res
@@ -614,6 +627,33 @@ class Table:
             eos.qK[key] = interp_var_to_grid(self.qK[key])
 
         return eos
+
+    def interpolate_to_NQT(self,method="linear"):
+        from .utils import NQT_exp, NQT_log
+
+        if self.shape[0]>1:
+            lnb_min = NQT_log(self.nb[0]*(1+1e-16))
+            lnb_max = NQT_log(self.nb[-1]*(1-1e-16))
+            lnb_new = np.linspace(lnb_min,lnb_max,num=self.shape[0])
+            nb_new = NQT_exp(lnb_new)
+        else:
+            nb_new = []
+
+        if self.shape[1]>1:
+            yq_new = self.yq
+        else:
+            yq_new = []
+
+        if self.shape[2]>1:
+            lt_min = NQT_log(self.t[0]*(1+1e-16))
+            lt_max = NQT_log(self.t[-1]*(1-1e-16))
+            lt_new = np.linspace(lt_min,lt_max,num=self.shape[2])
+            t_new = NQT_exp(lt_new)
+        else:
+            t_new = []
+
+        return self.interpolate(nb_new,yq_new,t_new,method=method)
+        
 
     def make_beta_eq_table(self):
         """
