@@ -330,7 +330,34 @@ class Table:
 
         return tov
 
-    def interpolate(self, nb_new, yq_new, t_new, method="cubic"):
+    def interpolate(self, nb_new=[], yq_new=[], t_new=[], method="cubic"):
+        """
+        Generate a new table by interpolating the EOS to the given grid
+        This function switches between methods for different dimensionality of table
+
+        * nb : 1D array with all the number densities
+        * yq : 1D array with all the charge fractions
+        * t  : 1D array with all the temperatures
+
+        * method : interpolation method, is passed to scipy.RegularGridInterpolator
+        """
+
+        if (self.shape[0] > 1 and self.shape[1] > 1 and self.shape[2] > 1):
+            # 3D table
+            assert(nb_new!=[])
+            assert(yq_new!=[])
+            assert(t_new!=[])
+            return self.interpolate_3D(nb_new, yq_new, t_new, method=method)
+        elif (self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1):
+            # 1D table in nb
+            assert(nb_new!=[])
+            assert(yq_new==[])
+            assert(t_new==[])
+            return self.interpolate_1D(nb_new, method=method)
+        else:
+            raise ValueError("Interpolation on to new grid is not supported for table with dimensions ({:d},{:d},{:d}).".format(self.shape[0],self.shape[1],self.shape[2]))
+
+    def interpolate_3D(self, nb_new, yq_new, t_new, method="cubic"):
         """
         Generate a new table by interpolating the EOS to the given grid
 
@@ -372,6 +399,65 @@ class Table:
             else:
                 myvar = var3d
             func = RegularGridInterpolator((log_nb, self.yq, log_t),
+                    myvar, method=method)
+            res = func(xi).reshape(eos.shape)
+            if log:
+                return np.exp(res)
+            return res
+
+        for key in self.thermo.keys():
+            if key == "Q1":
+                eos.thermo[key] = interp_var_to_grid(self.thermo[key], True)
+            else:
+                eos.thermo[key] = interp_var_to_grid(self.thermo[key])
+        for key in self.Y.keys():
+            eos.Y[key] = interp_var_to_grid(self.Y[key])
+        for key in self.A.keys():
+            eos.A[key] = interp_var_to_grid(self.A[key])
+        for key in self.Z.keys():
+            eos.Z[key] = interp_var_to_grid(self.Z[key])
+        for key in self.qK.keys():
+            eos.qK[key] = interp_var_to_grid(self.qK[key])
+
+        return eos
+    
+    def interpolate_1D(self, nb_new, method="cubic"):
+        """
+        Generate a new table by interpolating the EOS to the given grid
+
+        * nb : 1D array with all the number densities
+
+        * method : interpolation method, is passed to scipy.RegularGridInterpolator
+
+        NOTE: this only works for 1D tables
+        """
+        assert self.shape[0] > 1
+        assert self.shape[1] == 1
+        assert self.shape[2] == 1
+
+        from scipy.interpolate import RegularGridInterpolator
+
+        eos = Table(self.md, self.dtype)
+        eos.nb = nb_new.copy()
+        eos.t = self.t.copy()
+        eos.yq = self.yq.copy()
+        eos.shape = deepcopy((nb_new.shape[0], 1, 1))
+        eos.valid = np.ones(eos.shape, dtype=bool)
+        eos.mn = self.mn
+        eos.mp = self.mp
+        eos.lepton = self.lepton
+
+        log_nb = np.log(self.nb)
+
+        log_nb_new = np.log(nb_new)
+        xi = np.column_stack((log_nb_new.flatten(),))
+
+        def interp_var_to_grid(var1d, log=False):
+            if log:
+                myvar = np.log(var1d)
+            else:
+                myvar = var1d
+            func = RegularGridInterpolator((log_nb,),
                     myvar, method=method)
             res = func(xi).reshape(eos.shape)
             if log:
@@ -567,6 +653,10 @@ class Table:
             for line in tfile:
                 L = line.split()
                 it, inb, iyq = int(L[0])-1, int(L[1])-1, int(L[2])-1
+                if self.shape[1] == 1:
+                    iyq = 0
+                if self.shape[2] == 1:
+                    it = 0
                 for iv in range(1, 8):
                     self.thermo[self.md.thermo[iv][0]][inb, iyq, it] = \
                         float(L[2 + iv])
@@ -591,6 +681,10 @@ class Table:
             for line in cfile:
                 L = line.split()
                 it, inb, iyq = int(L[0])-1, int(L[1])-1, int(L[2])-1
+                if self.shape[1] == 1:
+                    iyq = 0
+                if self.shape[2] == 1:
+                    it = 0
                 Nphase = int(L[3])
                 Npairs = int(L[4])
                 ix = 5
@@ -622,6 +716,10 @@ class Table:
             for line in cfile:
                 L = line.split()
                 it, inb, iyq = int(L[0])-1, int(L[1])-1, int(L[2])-1
+                if self.shape[1] == 1:
+                    iyq = 0
+                if self.shape[2] == 1:
+                    it = 0
                 Nmicro = int(L[3])
                 ix = 4
                 for im in range(Nmicro):
@@ -675,7 +773,90 @@ class Table:
         if check_cs2_max:
             self.valid = self.valid & (self.thermo["cs2"] < 1)
 
-    def _write_data(self, dfile, dtype):
+    def write_hdf5(self, fname, dtype=np.float64,force_3D=False):
+        """
+        Handler for writing HDF5 files
+        
+        force_3D will save a 3D table regardless of the dimensionality of the eos.
+        """
+        # 3D table
+        if ((self.shape[0] > 1 and self.shape[1] > 1 and self.shape[2] > 1) or force_3D):
+            with h5py.File(fname, "w") as dfile:
+                self._write_data_3D(dfile, dtype)
+        
+        # 1D table in nb
+        elif (self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1):
+            with h5py.File(fname, "w") as dfile:
+                self._write_data_1D(dfile, dtype)
+        
+        else:
+            raise ValueError("Writing an HDF5 file is not supported for table with dimensions ({:d},{:d},{:d}).".format(self.shape[0],self.shape[1],self.shape[2]))
+
+        
+
+    def add_coldslice(self, fname, dtype=np.float64):
+        """
+        Add a cold table to the HDF5 file
+        """
+        assert self.shape[1] == 1
+        assert self.shape[2] == 1
+
+        with h5py.File(fname, "a") as dfile:
+            cs_grp = dfile.require_group("cold_slice")
+            self._write_data(cs_grp, dtype)
+
+    def _write_data_3D(self, dfile, dtype):
+        """
+        Writes the 1D table as an HDF5 file
+        """
+        
+        assert self.shape[0] > 1 and self.shape[1] == 1 and self.shape[2] == 1
+        
+        dfile.create_dataset("nb", dtype=dtype, data=self.nb,
+            compression="gzip", compression_opts=9)
+        
+        dfile["nb"].attrs["desc"] = "baryon number density [fm^-3]"
+
+        dfile.create_dataset("mn", dtype=dtype, data=self.mn)
+        dfile.create_dataset("mp", dtype=dtype, data=self.mp)
+        dfile["mn"].attrs["desc"] = "neutron mass [MeV]"
+        dfile["mp"].attrs["desc"] = "proton mass [MeV]"
+
+        for name, desc in self.md.thermo.values():
+            dfile.create_dataset(name, dtype=dtype, data=self.thermo[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[name].attrs["desc"] = desc
+
+        for name, desc in self.md.pairs.values():
+            key = "Y[{}]".format(name)
+            dfile.create_dataset(key, dtype=dtype, data=self.Y[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[key].attrs["desc"] = desc
+
+        for name, desc in self.md.quads.values():
+            key = "Y[{}]".format(name)
+            dfile.create_dataset(key, dtype=dtype, data=self.Y[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[key].attrs["desc"] = desc
+
+            key = "A[{}]".format(name)
+            dfile.create_dataset(key, dtype=dtype, data=self.A[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[key].attrs["desc"] = desc
+
+            key = "Z[{}]".format(name)
+            dfile.create_dataset(key, dtype=dtype, data=self.Z[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[key].attrs["desc"] = desc
+
+        for name, desc in self.md.micro.values():
+            dfile.create_dataset(name, dtype=dtype, data=self.qK[name][:,0,0],
+                compression="gzip", compression_opts=9)
+            dfile[name].attrs["desc"] = desc
+
+        dfile.close()
+
+    def _write_data_3D(self, dfile, dtype):
         dfile.create_dataset("nb", dtype=dtype, data=self.nb,
             compression="gzip", compression_opts=9)
         dfile.create_dataset("t", dtype=dtype, data=self.t,
@@ -722,24 +903,6 @@ class Table:
             dfile.create_dataset(name, dtype=dtype, data=self.qK[name],
                 compression="gzip", compression_opts=9)
             dfile[name].attrs["desc"] = desc
-
-    def write_hdf5(self, fname, dtype=np.float64):
-        """
-        Writes the table as an HDF5 file
-        """
-        with h5py.File(fname, "w") as dfile:
-            self._write_data(dfile, dtype)
-
-    def add_coldslice(self, fname, dtype=np.float64):
-        """
-        Add a cold table to the HDF5 file
-        """
-        assert self.shape[1] == 1
-        assert self.shape[2] == 1
-
-        with h5py.File(fname, "a") as dfile:
-            cs_grp = dfile.require_group("cold_slice")
-            self._write_data(cs_grp, dtype)
 
     def write_lorene(self, fname):
         """
