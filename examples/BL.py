@@ -54,6 +54,7 @@ eos.validate()
 eos.shrink_to_valid_nb()
 eos.write_hdf5(os.path.join(SCRIPTDIR, "BL", "BL.h5"))
 eos.write_lorene(os.path.join(SCRIPTDIR, "BL", "BL.lorene"))
+eos.write_txt(os.path.join(SCRIPTDIR, "BL", "BL.txt"))
 
 # %%
 print("{} <= nb <= {}".format(eos.nb.min(), eos.nb.max()))

@@ -1141,6 +1141,22 @@ class Table:
                 p  = Table.unit_press*self.thermo["Q1"][i,0,0]*self.nb[i]
                 f.write("%d %.15e %.15e %.15e\n" % (j+1, nb, e, p))
 
+    def write_txt(self, fname):
+        """
+        Export the table in TXT format. This is only possible for 1D tables.
+        """
+        assert self.shape[1] == 1
+        assert self.shape[2] == 1
+
+        with open(fname, "w") as f:
+            f.write("# 1:nb 2:rho 3:press\n")
+            for i in range(len(self.nb)):
+                nb = self.nb[i]
+                e  = self.nb[i]*self.mn*(self.thermo["Q7"][i,0,0] + 1)
+                p  = self.thermo["Q1"][i,0,0]*self.nb[i]
+                f.write("%.15e %.15e %.15e\n" % (nb, e, p))
+
+
     def write_number_fractions(self, fname):
         """
         Export an ASCII table with number fractions to complement the LORENE one.
