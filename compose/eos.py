@@ -789,7 +789,7 @@ class Table:
         for key in self.qK.keys():
             self.qK[key] = self.qK[key][in0:in1,iy0:iy1,it0:it1]
 
-    def read(self, path):
+    def read(self, path, enforce_equal_spacing=False, log_idvars=(True,False,True)):
         """
         Read the table from CompOSE ASCII format
 
@@ -802,6 +802,51 @@ class Table:
         self.yq = np.loadtxt(os.path.join(path, "eos.yq"), skiprows=2, dtype=self.dtype).reshape(-1)
         self.shape = (self.nb.shape[0], self.yq.shape[0], self.t.shape[0])
         self.valid = np.ones(self.shape, dtype=bool)
+
+        if enforce_equal_spacing:
+            nb_log, yq_log, t_log = log_idvars
+
+            if nb_log:
+                nb_min = np.log(self.nb[0])
+                nb_max = np.log(self.nb[-1])
+            else:
+                nb_min = self.nb[0]
+                nb_max = self.nb[-1]
+            d_nb = (nb_max - nb_min)/(self.shape[0] - 1)
+
+            for idx in range(1,self.shape[0]-1):
+                if nb_log:
+                    self.nb[idx] = np.exp(nb_min + idx*d_nb)
+                else:
+                    self.nb[idx] = nb_min + idx*d_nb
+
+            if yq_log:
+                yq_min = np.log(self.yq[0])
+                yq_max = np.log(self.yq[-1])
+            else:
+                yq_min = self.yq[0]
+                yq_max = self.yq[-1]
+            d_yq = (yq_max - yq_min)/(self.shape[1] - 1)
+
+            for idx in range(1,self.shape[1]-1):
+                if yq_log:
+                    self.yq[idx] = np.exp(yq_min + idx*d_yq)
+                else:
+                    self.yq[idx] = yq_min + idx*d_yq
+
+            if t_log:
+                t_min = np.log(self.t[0])
+                t_max = np.log(self.t[-1])
+            else:
+                t_min = self.t[0]
+                t_max = self.t[-1]
+            d_t = (t_max - t_min)/(self.shape[2] - 1)
+
+            for idx in range(1,self.shape[2]-1):
+                if t_log:
+                    self.t[idx] = np.exp(t_min + idx*d_t)
+                else:
+                    self.t[idx] = t_min + idx*d_t
 
         L = open(os.path.join(path, "eos.thermo"), "r").readline().split()
         self.mn = float(L[0])
